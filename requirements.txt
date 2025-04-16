@@ -1,7 +1,10 @@
-streamlit
+Flask
 pandas
 openpyxl
-whisper
 google-generativeai
+whisper
+fuzzywuzzy
+Werkzeug
+python-Levenshtein
 uvicorn==0.15.0
 gunicorn==20.1.0
