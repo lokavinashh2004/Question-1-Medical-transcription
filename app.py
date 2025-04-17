@@ -12,7 +12,7 @@ import tempfile
 
 app = Flask(__name__)
 
-# first step to declare all the required 
+# Configuration constants
 MEDICAL_CODES_EXCEL = "medical_codes.xlsx"
 OUTPUT_DIR = "output"
 JSON_OUTPUT_DIR = os.path.join(OUTPUT_DIR, "json")
@@ -24,7 +24,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(JSON_OUTPUT_DIR, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# using  whisper model
+# Global whisper model
 whisper_model = None
 
 def initialize_whisper():
@@ -51,7 +51,7 @@ def initialize_default_codes():
                 "Type": "lab_test",
                 "Alternate Terms": "CBC, blood panel"
             },
-            
+            # Add more default codes as needed
         ]
         pd.DataFrame(default_codes).to_excel(MEDICAL_CODES_EXCEL, index=False)
 
@@ -79,7 +79,9 @@ def load_medical_codes() -> dict:
 
             if 'Alternate Terms' in df.columns and pd.notna(row['Alternate Terms']):
                 for alt_term in str(row['Alternate Terms']).split(','):
-                    codes_db[alt_term.strip().lower()] = codes_db[primary_term]
+                    alt_term_clean = alt_term.strip().lower()
+                    if alt_term_clean:  # Ensure not empty
+                        codes_db[alt_term_clean] = codes_db[primary_term]
 
         print(f"Loaded {len(codes_db)} medical codes")
         return codes_db
@@ -100,31 +102,43 @@ def extract_medical_phrases(model, text):
     Text: {text}
     """
     
-    response = model.generate_content(prompt)
-    
     try:
-        
+        response = model.generate_content(prompt)
         response_text = response.text
+        
+        # Find JSON array in response
         start = response_text.find('[')
         end = response_text.rfind(']') + 1
         
         if start >= 0 and end > start:
             json_str = response_text[start:end]
-            return json.loads(json_str)
-        else:
-           
-            return [{"phrase": text, "category": "unknown", "confidence": 0.5}]
+            parsed_json = json.loads(json_str)
+            if isinstance(parsed_json, list):
+                return parsed_json
+        
+        # Fallback if proper JSON wasn't found
+        return [{"phrase": text, "category": "unknown", "confidence": 0.5}]
     except Exception as e:
         print(f"Error parsing Gemini response: {e}")
         return [{"phrase": text, "category": "unknown", "confidence": 0.5}]
 
 def match_phrase_to_code(phrase, codes_db):
     """Match a medical phrase to the codes database using fuzzy matching"""
+    if not phrase:
+        return {
+            'matched_term': None,
+            'code': None,
+            'description': None,
+            'type': None,
+            'match_score': 0
+        }
+        
     best_match = None
     best_score = 0
+    phrase_lower = phrase.lower()
     
     for term, details in codes_db.items():
-        score = fuzz.ratio(phrase.lower(), term.lower())
+        score = fuzz.ratio(phrase_lower, term)
         if score > best_score and score > 70:  # Only match if similarity > 70%
             best_score = score
             best_match = {
@@ -183,8 +197,11 @@ def process_audio(audio_path: str):
     # 2. Transcribe audio
     print(f"Transcribing {audio_path}...")
     whisper_model = initialize_whisper()
-    transcription = whisper_model.transcribe(audio_path)
-    medical_text = transcription["text"]
+    try:
+        transcription = whisper_model.transcribe(audio_path)
+        medical_text = transcription["text"]
+    except Exception as e:
+        raise ValueError(f"Audio transcription failed: {str(e)}")
 
     # 3. Extract medical phrases
     gemini_model = initialize_gemini()
@@ -193,7 +210,8 @@ def process_audio(audio_path: str):
     # 4. Match to codes and prepare results
     results = []
     for phrase in extracted_phrases:
-        match = match_phrase_to_code(phrase['phrase'], codes_db)
+        phrase_text = phrase.get('phrase', '')
+        match = match_phrase_to_code(phrase_text, codes_db)
         results.append({
             **phrase,
             **match,
@@ -205,8 +223,6 @@ def process_audio(audio_path: str):
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     return save_outputs(results, base_name)
 
-
-
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -217,25 +233,27 @@ def upload_file():
         return jsonify({'error': 'No file part'}), 400
     
     file = request.files['file']
-    if file.filename == '':
-        # Handle browser-recorded audio which might not have a filename
-        if file.content_type.startswith('audio/'):
-            # Create a temporary file for the recording
-            temp_dir = tempfile.mkdtemp()
-            temp_path = os.path.join(temp_dir, 'recording.wav')
-            file.save(temp_path)
-            filepath = temp_path
-            filename = 'browser_recording'
-        else:
-            return jsonify({'error': 'No selected file'}), 400
-    else:
-        # Handle regular file upload
-        filename = werkzeug.utils.secure_filename(file.filename)
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-        filename = os.path.splitext(filename)[0]
+    temp_dir = None
     
     try:
+        if file.filename == '':
+            # Handle browser-recorded audio which might not have a filename
+            if file.content_type and file.content_type.startswith('audio/'):
+                # Create a temporary file for the recording
+                temp_dir = tempfile.mkdtemp()
+                temp_path = os.path.join(temp_dir, 'recording.wav')
+                file.save(temp_path)
+                filepath = temp_path
+                filename = 'browser_recording'
+            else:
+                return jsonify({'error': 'No selected file or invalid file type'}), 400
+        else:
+            # Handle regular file upload
+            filename = werkzeug.utils.secure_filename(file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+            filename = os.path.splitext(filename)[0]
+        
         excel_file, json_file = process_audio(filepath)
         
         # Read the JSON file to send back to the client
@@ -248,31 +266,47 @@ def upload_file():
             'json_file': os.path.basename(json_file),
             'results': json_data
         })
+    
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+    
     finally:
         # Clean up temp files if created
-        if 'temp_dir' in locals():
+        if temp_dir:
             import shutil
             try:
                 shutil.rmtree(temp_dir)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error cleaning temp directory: {e}")
 
 @app.route('/download/<filetype>/<filename>')
 def download_file(filetype, filename):
+    # Validate filename to prevent directory traversal
+    filename = werkzeug.utils.secure_filename(filename)
+    
     if filetype == 'excel':
-        return send_file(os.path.join(OUTPUT_DIR, filename), as_attachment=True)
+        file_path = os.path.join(OUTPUT_DIR, filename)
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        return send_file(file_path, as_attachment=True)
+    
     elif filetype == 'json':
-        return send_file(os.path.join(JSON_OUTPUT_DIR, filename), as_attachment=True)
+        file_path = os.path.join(JSON_OUTPUT_DIR, filename)
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        return send_file(file_path, as_attachment=True)
+    
     else:
         return jsonify({'error': 'Invalid file type'}), 400
 
 @app.route('/codes')
 def view_codes():
     try:
+        if not os.path.exists(MEDICAL_CODES_EXCEL):
+            initialize_default_codes()
+            
         codes_df = pd.read_excel(MEDICAL_CODES_EXCEL)
         codes = codes_df.to_dict('records')
         return render_template('codes.html', codes=codes)
@@ -283,6 +317,16 @@ def view_codes():
 def add_code():
     if request.method == 'POST':
         try:
+            # Validate form data
+            term = request.form.get('term', '').strip()
+            description = request.form.get('description', '').strip()
+            code = request.form.get('code', '').strip()
+            type_val = request.form.get('type', '').strip()
+            
+            if not all([term, description, code, type_val]):
+                return render_template('error.html', 
+                                      error="All required fields (Term, Description, Code, Type) must be filled")
+            
             # Load existing codes
             if os.path.exists(MEDICAL_CODES_EXCEL):
                 codes_df = pd.read_excel(MEDICAL_CODES_EXCEL)
@@ -291,11 +335,11 @@ def add_code():
             
             # Add new code
             new_code = {
-                'Term': request.form['term'],
-                'Description': request.form['description'],
-                'Code': request.form['code'],
-                'Type': request.form['type'],
-                'Alternate Terms': request.form.get('alternate_terms', '')
+                'Term': term,
+                'Description': description,
+                'Code': code,
+                'Type': type_val,
+                'Alternate Terms': request.form.get('alternate_terms', '').strip()
             }
             
             # Append and save
