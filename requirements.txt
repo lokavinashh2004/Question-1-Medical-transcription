@@ -1,7 +1,7 @@
 Flask==2.3.3
 pandas==2.2.2
 openpyxl==3.1.2
-whisper==1.1.10  # or the version installed via OpenAI’s whisper package
+openai-whisper
 google-generativeai==0.3.2
 fuzzywuzzy==0.18.0
 python-Levenshtein==0.23.0
