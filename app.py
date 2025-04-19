@@ -12,19 +12,19 @@ import tempfile
 
 app = Flask(__name__)
 
-# Configuration constants
+
 MEDICAL_CODES_EXCEL = "medical_codes.xlsx"
 OUTPUT_DIR = "output"
 JSON_OUTPUT_DIR = os.path.join(OUTPUT_DIR, "json")
 UPLOAD_FOLDER = "uploads"
 API_KEY = "AIzaSyDPmukhY7Ejs9TEwaRyxtCMiTZVAsJC2dk"  # Replace with your key
 
-# Ensure directories exist
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(JSON_OUTPUT_DIR, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Global whisper model
+
 whisper_model = None
 
 def initialize_whisper():
@@ -34,7 +34,7 @@ def initialize_whisper():
         whisper_model = whisper.load_model("base")
     return whisper_model
 
-# Initialize Google Gemini
+
 def initialize_gemini():
     genai.configure(api_key=API_KEY)
     return genai.GenerativeModel('gemini-1.5-pro')
@@ -51,7 +51,7 @@ def initialize_default_codes():
                 "Type": "lab_test",
                 "Alternate Terms": "CBC, blood panel"
             },
-            # Add more default codes as needed
+            
         ]
         pd.DataFrame(default_codes).to_excel(MEDICAL_CODES_EXCEL, index=False)
 
@@ -106,7 +106,7 @@ def extract_medical_phrases(model, text):
         response = model.generate_content(prompt)
         response_text = response.text
         
-        # Find JSON array in response
+        
         start = response_text.find('[')
         end = response_text.rfind(']') + 1
         
@@ -116,7 +116,7 @@ def extract_medical_phrases(model, text):
             if isinstance(parsed_json, list):
                 return parsed_json
         
-        # Fallback if proper JSON wasn't found
+        
         return [{"phrase": text, "category": "unknown", "confidence": 0.5}]
     except Exception as e:
         print(f"Error parsing Gemini response: {e}")
@@ -165,13 +165,13 @@ def save_outputs(results: List[Dict[str, Any]], base_filename: str):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename_base = f"{base_filename}_{timestamp}"
 
-    # Save to Excel
+  
     excel_path = os.path.join(OUTPUT_DIR, f"{filename_base}.xlsx")
     df = pd.DataFrame(results)
     df.to_excel(excel_path, index=False)
     print(f"Excel report saved to: {excel_path}")
 
-    # Save to JSON
+   
     json_path = os.path.join(JSON_OUTPUT_DIR, f"{filename_base}.json")
     with open(json_path, 'w') as f:
         json.dump({
@@ -188,13 +188,13 @@ def save_outputs(results: List[Dict[str, Any]], base_filename: str):
 
 def process_audio(audio_path: str):
     """Main processing pipeline"""
-    # 1. Initialize and validate
+    
     initialize_default_codes()
     codes_db = load_medical_codes()
     if not codes_db:
         raise ValueError("No medical codes loaded - cannot continue")
 
-    # 2. Transcribe audio
+   
     print(f"Transcribing {audio_path}...")
     whisper_model = initialize_whisper()
     try:
@@ -203,11 +203,11 @@ def process_audio(audio_path: str):
     except Exception as e:
         raise ValueError(f"Audio transcription failed: {str(e)}")
 
-    # 3. Extract medical phrases
+   
     gemini_model = initialize_gemini()
     extracted_phrases = extract_medical_phrases(gemini_model, medical_text)
 
-    # 4. Match to codes and prepare results
+   
     results = []
     for phrase in extracted_phrases:
         phrase_text = phrase.get('phrase', '')
@@ -219,7 +219,7 @@ def process_audio(audio_path: str):
             'timestamp': datetime.now().isoformat()
         })
 
-    # 5. Save outputs
+    
     base_name = os.path.splitext(os.path.basename(audio_path))[0]
     return save_outputs(results, base_name)
 
@@ -237,9 +237,9 @@ def upload_file():
     
     try:
         if file.filename == '':
-            # Handle browser-recorded audio which might not have a filename
+           
             if file.content_type and file.content_type.startswith('audio/'):
-                # Create a temporary file for the recording
+               
                 temp_dir = tempfile.mkdtemp()
                 temp_path = os.path.join(temp_dir, 'recording.wav')
                 file.save(temp_path)
@@ -248,7 +248,7 @@ def upload_file():
             else:
                 return jsonify({'error': 'No selected file or invalid file type'}), 400
         else:
-            # Handle regular file upload
+            
             filename = werkzeug.utils.secure_filename(file.filename)
             filepath = os.path.join(UPLOAD_FOLDER, filename)
             file.save(filepath)
@@ -256,7 +256,7 @@ def upload_file():
         
         excel_file, json_file = process_audio(filepath)
         
-        # Read the JSON file to send back to the client
+        
         with open(json_file, 'r') as f:
             json_data = json.load(f)
         
@@ -273,7 +273,7 @@ def upload_file():
         return jsonify({'error': str(e)}), 500
     
     finally:
-        # Clean up temp files if created
+       
         if temp_dir:
             import shutil
             try:
@@ -283,7 +283,7 @@ def upload_file():
 
 @app.route('/download/<filetype>/<filename>')
 def download_file(filetype, filename):
-    # Validate filename to prevent directory traversal
+    
     filename = werkzeug.utils.secure_filename(filename)
     
     if filetype == 'excel':
@@ -317,7 +317,7 @@ def view_codes():
 def add_code():
     if request.method == 'POST':
         try:
-            # Validate form data
+            
             term = request.form.get('term', '').strip()
             description = request.form.get('description', '').strip()
             code = request.form.get('code', '').strip()
@@ -327,13 +327,13 @@ def add_code():
                 return render_template('error.html', 
                                       error="All required fields (Term, Description, Code, Type) must be filled")
             
-            # Load existing codes
+            
             if os.path.exists(MEDICAL_CODES_EXCEL):
                 codes_df = pd.read_excel(MEDICAL_CODES_EXCEL)
             else:
                 codes_df = pd.DataFrame(columns=['Term', 'Description', 'Code', 'Type', 'Alternate Terms'])
             
-            # Add new code
+            
             new_code = {
                 'Term': term,
                 'Description': description,
@@ -342,7 +342,7 @@ def add_code():
                 'Alternate Terms': request.form.get('alternate_terms', '').strip()
             }
             
-            # Append and save
+            
             codes_df = pd.concat([codes_df, pd.DataFrame([new_code])], ignore_index=True)
             codes_df.to_excel(MEDICAL_CODES_EXCEL, index=False)
             
@@ -353,6 +353,6 @@ def add_code():
     return render_template('add_code.html')
 
 if __name__ == '__main__':
-    # Initialize medical codes at startup
+    
     initialize_default_codes()
     app.run(debug=True)
